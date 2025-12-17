@@ -1,9 +1,16 @@
 import json
 import os
 import uuid
-from datetime import datetime, date, time, timedelta
 import re
 import asyncio
+from datetime import datetime, date, time, timedelta
+
+# Спроба завантаження змінних оточення
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -11,13 +18,12 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
 
-# ---------------- CONFIG ----------------
-# Токен та ID винесено в змінні оточення для безпеки (Практична 3)
-API_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+# ---------------- CONFIGURATION ----------------
+API_TOKEN = os.getenv("BOT_TOKEN", "8428204566:AAFyJbCJv5R8zUiyyEvWe0RWUtokPQBxwZg")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "834450069"))
 DATA_FILE = "appointments.json"
 
-# Графік роботи
+# Робочий графік
 WORK_SCHEDULE = {
     0: (10, 20),  # Пн
     1: (10, 20),  # Вт
@@ -29,14 +35,14 @@ WORK_SCHEDULE = {
 }
 SLOT_MINUTES = 30
 
-# Контакти салону
+# Контакти
 SALON_CONTACTS = {
     "tg": "@snchkss",
     "phone": "+380 67 388 07 81",
     "address": "м. Луцьк, вул. Львівська 75, Волинська область, гуртожиток біля ЛНТУ"
 }
 
-# Майстри та послуги
+# База даних майстрів та послуг
 MASTERS = {
     "manicure": {
         "title": "Галя",
@@ -64,7 +70,7 @@ MASTERS = {
     }
 }
 
-# ---------------- FSM ----------------
+# ---------------- FSM STATES ----------------
 class BookingStates(StatesGroup):
     entering_name = State()
     entering_phone = State()
@@ -81,12 +87,12 @@ class EditStates(StatesGroup):
 class DeleteStates(StatesGroup):
     selecting_appointment = State()
 
-# ---------------- Storage ----------------
+# ---------------- INITIALIZATION ----------------
 storage = MemoryStorage()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=storage)
 
-# ---------------- Helpers ----------------
+# ---------------- UTILS ----------------
 def ensure_json_exists():
     if not os.path.exists(DATA_FILE):
         with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -104,48 +110,6 @@ def save_appointments(appts):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(appts, f, ensure_ascii=False, indent=2)
 
-# Функція для перевірки та надсилання нагадувань
-async def send_reminders():
-    """Перевіряє записи та надсилає нагадування за день до візиту"""
-    while True:
-        try:
-            now = datetime.now()
-            tomorrow = (now + timedelta(days=1)).date()
-            
-            appts = load_appointments()
-            
-            for appt in appts:
-                # Перевіряємо чи не відправляли вже нагадування
-                if appt.get("reminder_sent"):
-                    continue
-                
-                appt_date = datetime.strptime(appt["date"], "%Y-%m-%d").date()
-                
-                # Якщо запис завтра - відправляємо нагадування
-                if appt_date == tomorrow:
-                    try:
-                        reminder_text = (
-                            "🔔 НАГАДУВАННЯ!\n\n"
-                            f"Завтра у вас запис:\n\n"
-                            f"{format_appointment(appt)}\n\n"
-                            f"Чекаємо на вас! 💖"
-                        )
-                        await bot.send_message(appt["user_id"], reminder_text)
-                        
-                        # Позначаємо що нагадування відправлено
-                        appt["reminder_sent"] = True
-                        save_appointments(appts)
-                        
-                        print(f"✅ Нагадування відправлено: {appt['user_name']} - {appt['date']}")
-                    except Exception as e:
-                        print(f"❌ Помилка відправки нагадування: {e}")
-            
-        except Exception as e:
-            print(f"❌ Помилка в send_reminders: {e}")
-        
-        # Перевіряємо кожні 6 годин
-        await asyncio.sleep(6 * 60 * 60)
-
 def format_appointment(a, show_number=False, number=None):
     text = ""
     if show_number:
@@ -157,6 +121,41 @@ def format_appointment(a, show_number=False, number=None):
         f"📅 {a.get('date')} 🕒 {a.get('time')}"
     )
     return text
+
+# Background task for reminders
+async def send_reminders():
+    while True:
+        try:
+            now = datetime.now()
+            tomorrow = (now + timedelta(days=1)).date()
+            appts = load_appointments()
+            
+            for appt in appts:
+                if appt.get("reminder_sent"):
+                    continue
+                try:
+                    appt_date = datetime.strptime(appt["date"], "%Y-%m-%d").date()
+                except: 
+                    continue
+                
+                if appt_date == tomorrow:
+                    try:
+                        reminder_text = (
+                            "🔔 НАГАДУВАННЯ!\n\n"
+                            f"Завтра у вас запис:\n\n"
+                            f"{format_appointment(appt)}\n\n"
+                            f"Чекаємо на вас! 💖"
+                        )
+                        await bot.send_message(appt["user_id"], reminder_text)
+                        appt["reminder_sent"] = True
+                        save_appointments(appts)
+                        print(f"Reminder sent to: {appt['user_name']}")
+                    except Exception as e:
+                        print(f"Error sending reminder: {e}")
+        except Exception as e:
+            print(f"Error in background task: {e}")
+        
+        await asyncio.sleep(6 * 60 * 60)
 
 def get_work_hours_for_date(d: date):
     return WORK_SCHEDULE.get(d.weekday(), None)
@@ -186,23 +185,27 @@ def get_available_slots(master_key, duration, d, exclude_appt_id=None):
     appts = load_appointments()
     available = []
     for s in all_slots:
-        start_dt = datetime.strptime(f"{d.isoformat()} {s}", "%Y-%m-%d %H:%M")
-        conflict = False
-        for ex in appts:
-            if exclude_appt_id and ex.get("id") == exclude_appt_id:
-                continue
-            if ex.get("master") != master_key:
-                continue
-            ex_dt = datetime.strptime(f"{ex['date']} {ex['time']}", "%Y-%m-%d %H:%M")
-            ex_dur = ex.get("duration", 0)
-            if is_conflict(start_dt, duration, ex_dt, ex_dur):
-                conflict = True
-                break
-        if not conflict:
-            available.append(s)
+        try:
+            start_dt = datetime.strptime(f"{d.isoformat()} {s}", "%Y-%m-%d %H:%M")
+            conflict = False
+            for ex in appts:
+                if exclude_appt_id and ex.get("id") == exclude_appt_id:
+                    continue
+                if ex.get("master") != master_key:
+                    continue
+                try:
+                    ex_dt = datetime.strptime(f"{ex['date']} {ex['time']}", "%Y-%m-%d %H:%M")
+                    ex_dur = ex.get("duration", 0)
+                    if is_conflict(start_dt, duration, ex_dt, ex_dur):
+                        conflict = True
+                        break
+                except: continue
+            if not conflict:
+                available.append(s)
+        except: continue
     return available
 
-# ---------------- Keyboards ----------------
+# ---------------- KEYBOARDS ----------------
 def main_menu_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("📅 Запис", "📋 Усі записи")
@@ -253,7 +256,7 @@ def numbers_kb(count):
     kb.add("⬅️ Назад")
     return kb
 
-# ---------------- Handlers ----------------
+# ---------------- HANDLERS ----------------
 @dp.message_handler(commands=['start'], state='*')
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.finish()
@@ -281,11 +284,9 @@ async def show_all_appointments(message: types.Message, state: FSMContext):
     if not appts:
         await message.answer("Записів немає.", reply_markup=main_menu_kb())
         return
-    
     text = "📋 Всі записи:\n\n"
     for i, a in enumerate(appts, 1):
         text += f"{i}. {format_appointment(a)}\n\n"
-    
     await message.answer(text, reply_markup=main_menu_kb())
 
 @dp.message_handler(lambda m: m.text in ["⬅️ Назад", "⬅️ Головне меню"], state='*')
@@ -306,25 +307,20 @@ async def show_my_appointments(message: types.Message, state: FSMContext):
     text = "🧾 Ваші записи:\n\n"
     for i, a in enumerate(user_appts, 1):
         text += format_appointment(a, show_number=True, number=i) + "\n\n"
-    
     await message.answer(text, reply_markup=my_appointments_menu_kb())
 
-# ---------- Edit flow ----------
+# ---------- EDIT LOGIC ----------
 @dp.message_handler(lambda m: m.text == "✏️ Редагувати запис", state='*')
 async def start_edit(message: types.Message, state: FSMContext):
     appts = load_appointments()
     user_appts = [a for a in appts if a.get("user_id") == message.from_user.id]
-    
     if not user_appts:
         await message.answer("У вас немає записів для редагування.", reply_markup=main_menu_kb())
         return
-    
     text = "🧾 Ваші записи:\n\n"
     for i, a in enumerate(user_appts, 1):
         text += format_appointment(a, show_number=True, number=i) + "\n\n"
-    
     text += "\nВведіть номер запису, який хочете редагувати:"
-    
     await EditStates.selecting_appointment.set()
     await state.update_data(user_appointments=user_appts)
     await message.answer(text, reply_markup=numbers_kb(len(user_appts)))
@@ -335,16 +331,13 @@ async def select_edit_appointment(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer("Редагування скасовано.", reply_markup=main_menu_kb())
         return
-    
     try:
         num = int(message.text)
         data = await state.get_data()
         user_appts = data.get("user_appointments", [])
-        
         if num < 1 or num > len(user_appts):
             await message.answer(f"Введіть число від 1 до {len(user_appts)}:", reply_markup=numbers_kb(len(user_appts)))
             return
-        
         selected_appt = user_appts[num - 1]
         await state.update_data(
             edit_appt_id=selected_appt["id"],
@@ -353,7 +346,6 @@ async def select_edit_appointment(message: types.Message, state: FSMContext):
         )
         await EditStates.editing_date.set()
         await message.answer(f"Редагуємо запис:\n{format_appointment(selected_appt)}\n\nОберіть нову дату:", reply_markup=date_kb())
-        
     except ValueError:
         data = await state.get_data()
         user_appts = data.get("user_appointments", [])
@@ -365,17 +357,14 @@ async def edit_date(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer("Редагування скасовано.", reply_markup=main_menu_kb())
         return
-    
     try:
         chosen_date = datetime.strptime(message.text, "%d.%m.%Y").date()
     except:
         await message.answer("Невірний формат дати. Оберіть зі списку:", reply_markup=date_kb())
         return
-    
     if chosen_date < date.today():
         await message.answer("Не можна обрати минулу дату. Оберіть іншу:", reply_markup=date_kb())
         return
-    
     data = await state.get_data()
     available = get_available_slots(
         data.get("master"), 
@@ -383,11 +372,9 @@ async def edit_date(message: types.Message, state: FSMContext):
         chosen_date,
         exclude_appt_id=data.get("edit_appt_id")
     )
-    
     if not available:
         await message.answer("На цю дату немає вільних слотів. Оберіть іншу:", reply_markup=date_kb())
         return
-    
     await state.update_data(new_date=chosen_date.strftime("%Y-%m-%d"))
     await EditStates.choosing_time_for_edit.set()
     await message.answer("Оберіть новий час:", reply_markup=slots_kb(available))
@@ -403,7 +390,6 @@ async def edit_time(message: types.Message, state: FSMContext):
             await EditStates.editing_date.set()
             await message.answer("Оберіть дату:", reply_markup=date_kb())
             return
-    
     data = await state.get_data()
     chosen_date = datetime.strptime(data.get("new_date"), "%Y-%m-%d").date()
     available = get_available_slots(
@@ -412,38 +398,31 @@ async def edit_time(message: types.Message, state: FSMContext):
         chosen_date,
         exclude_appt_id=data.get("edit_appt_id")
     )
-    
     if message.text not in available:
         await message.answer("Оберіть час зі списку:", reply_markup=slots_kb(available))
         return
-    
     appts = load_appointments()
     for a in appts:
         if a["id"] == data.get("edit_appt_id"):
             a["date"] = data.get("new_date")
             a["time"] = message.text
             break
-    
     save_appointments(appts)
     await state.finish()
     await message.answer("✅ Запис успішно оновлено!", reply_markup=main_menu_kb())
 
-# ---------- Delete flow ----------
+# ---------- DELETE LOGIC ----------
 @dp.message_handler(lambda m: m.text == "❌ Видалити запис", state='*')
 async def start_delete(message: types.Message, state: FSMContext):
     appts = load_appointments()
     user_appts = [a for a in appts if a.get("user_id") == message.from_user.id]
-    
     if not user_appts:
         await message.answer("У вас немає записів для видалення.", reply_markup=main_menu_kb())
         return
-    
     text = "🧾 Ваші записи:\n\n"
     for i, a in enumerate(user_appts, 1):
         text += format_appointment(a, show_number=True, number=i) + "\n\n"
-    
     text += "\nВведіть номер запису, який хочете видалити:"
-    
     await DeleteStates.selecting_appointment.set()
     await state.update_data(user_appointments=user_appts)
     await message.answer(text, reply_markup=numbers_kb(len(user_appts)))
@@ -454,32 +433,25 @@ async def select_delete_appointment(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer("Видалення скасовано.", reply_markup=main_menu_kb())
         return
-    
     try:
         num = int(message.text)
         data = await state.get_data()
         user_appts = data.get("user_appointments", [])
-        
         if num < 1 or num > len(user_appts):
             await message.answer(f"Введіть число від 1 до {len(user_appts)}:", reply_markup=numbers_kb(len(user_appts)))
             return
-        
         selected_appt = user_appts[num - 1]
-        
-        # Видаляємо запис
         appts = load_appointments()
         new_appts = [a for a in appts if a["id"] != selected_appt["id"]]
         save_appointments(new_appts)
-        
         await state.finish()
         await message.answer("✅ Запис успішно видалено!", reply_markup=main_menu_kb())
-        
     except ValueError:
         data = await state.get_data()
         user_appts = data.get("user_appointments", [])
         await message.answer(f"Введіть число від 1 до {len(user_appts)}:", reply_markup=numbers_kb(len(user_appts)))
 
-# ---------- Booking flow ----------
+# ---------- BOOKING LOGIC ----------
 @dp.message_handler(lambda m: m.text == "📅 Запис", state='*')
 async def start_booking(message: types.Message, state: FSMContext):
     await state.finish()
@@ -510,7 +482,6 @@ async def process_phone(message: types.Message, state: FSMContext):
             await BookingStates.entering_name.set()
             await message.answer("Введіть ім'я:")
             return
-    
     phone_raw = re.sub(r'[\s\-\(\)]', '', message.text.strip())
     if not PHONE_RE.match(phone_raw):
         await message.answer("Невірний формат номера. Формат: +380501234567 або 0501234567")
@@ -525,17 +496,14 @@ async def process_master(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer("Запис скасовано.", reply_markup=main_menu_kb())
         return
-    
     master_key = None
     for key, info in MASTERS.items():
         if info["title"] == message.text:
             master_key = key
             break
-    
     if not master_key:
         await message.answer("Оберіть майстра зі списку:", reply_markup=masters_kb())
         return
-    
     await state.update_data(master=master_key, master_title=MASTERS[master_key]["title"])
     await BookingStates.next()
     await message.answer("Оберіть послугу:", reply_markup=services_kb(master_key))
@@ -551,21 +519,17 @@ async def process_service(message: types.Message, state: FSMContext):
             await BookingStates.choosing_master.set()
             await message.answer("Оберіть майстра:", reply_markup=masters_kb())
             return
-    
     data = await state.get_data()
     master_key = data.get("master")
-    
     service_key = None
     for sk, svc in MASTERS[master_key]["services"].items():
         name, price, dur = svc
         if message.text.startswith(name):
             service_key = sk
             break
-    
     if not service_key:
         await message.answer("Оберіть послугу зі списку:", reply_markup=services_kb(master_key))
         return
-    
     name, price, dur = MASTERS[master_key]["services"][service_key]
     await state.update_data(service=service_key, service_title=name, price=price, duration=dur)
     await BookingStates.next()
@@ -583,52 +547,54 @@ async def process_date(message: types.Message, state: FSMContext):
             await BookingStates.choosing_service.set()
             await message.answer("Оберіть послугу:", reply_markup=services_kb(data.get("master")))
             return
-    
     try:
         chosen_date = datetime.strptime(message.text, "%d.%m.%Y").date()
     except:
         await message.answer("Невірний формат дати. Оберіть зі списку:", reply_markup=date_kb())
         return
-    
     if chosen_date < date.today():
         await message.answer("Не можна обрати минулу дату. Оберіть іншу:", reply_markup=date_kb())
         return
-    
     data = await state.get_data()
     available = get_available_slots(data.get("master"), data.get("duration"), chosen_date)
-    
     if not available:
         await message.answer("На цю дату немає вільних слотів. Оберіть іншу дату:", reply_markup=date_kb())
         return
-    
     await state.update_data(date=chosen_date.strftime("%Y-%m-%d"))
     await BookingStates.next()
     await message.answer("Оберіть час:", reply_markup=slots_kb(available))
 
 @dp.message_handler(state=BookingStates.choosing_time)
-async def process_time(message: types.Message, state: FSMContext):
+async def process_time_final(message: types.Message, state: FSMContext):
+    # Navigation check
     if message.text in ["⬅️ Назад", "⬅️ Головне меню"]:
         if message.text == "⬅️ Головне меню":
             await state.finish()
             await message.answer("Запис скасовано.", reply_markup=main_menu_kb())
-            return
         else:
             await BookingStates.choosing_date.set()
             await message.answer("Оберіть дату:", reply_markup=date_kb())
-            return
-    
+        return
+
+    # Validation
     data = await state.get_data()
-    chosen_date = datetime.strptime(data.get("date"), "%Y-%m-%d").date()
+    try:
+        chosen_date = datetime.strptime(data.get("date"), "%Y-%m-%d").date()
+    except Exception as e:
+        await message.answer("Помилка дати, почніть спочатку.")
+        await state.finish()
+        return
+
     available = get_available_slots(data.get("master"), data.get("duration"), chosen_date)
     
     if message.text not in available:
-        await message.answer("Оберіть час зі списку:", reply_markup=slots_kb(available))
+        await message.answer("Цей час вже зайнятий або невірний. Оберіть зі списку:", reply_markup=slots_kb(available))
         return
-    
-    # Створення запису
-    appt = {
+
+    # Create record
+    new_appt = {
         "id": str(uuid.uuid4()),
-        "user_id": data.get("user_id"),
+        "user_id": message.from_user.id,
         "user_name": data.get("user_name"),
         "phone": data.get("phone"),
         "master": data.get("master"),
@@ -638,39 +604,32 @@ async def process_time(message: types.Message, state: FSMContext):
         "price": data.get("price"),
         "duration": data.get("duration"),
         "date": data.get("date"),
-        "time": message.text
+        "time": message.text,
+        "reminder_sent": False
     }
-    
+
     appts = load_appointments()
-    appts.append(appt)
+    appts.append(new_appt)
     save_appointments(appts)
     
-    # Надсилаємо повідомлення адміну про новий запис
-    try:
-        admin_text = (
-            "🔔 НОВИЙ ЗАПИС!\n\n"
-            f"{format_appointment(appt)}\n\n"
-            f"🆔 User ID: {appt['user_id']}"
-        )
-        await bot.send_message(ADMIN_ID, admin_text)
-    except Exception as e:
-        print(f"Помилка при відправці адміну: {e}")
-    
     await state.finish()
+    
     await message.answer(
-        f"✅ Запис підтверджено!\n\n{format_appointment(appt)}\n\nОчікуємо вас!",
+        f"✅ ЗАПИС УСПІШНО СТВОРЕНО!\n\n{format_appointment(new_appt)}\n\nЧекаємо на вас! ✨", 
         reply_markup=main_menu_kb()
     )
+    
+    try:
+        await bot.send_message(ADMIN_ID, f"🔔 Новий запис!\n\n{format_appointment(new_appt)}")
+    except:
+        pass
 
-# ---------- Cancel handler (прибрав бо є окремий handler зверху) ----------
-
-# ---------------- Run ----------------
-async def on_startup(dp):
-    """Запускається при старті бота"""
-    print("🚀 Бот запущено...")
-    print("⏰ Система нагадувань активована...")
-    # Запускаємо фонову задачу для нагадувань
-    asyncio.create_task(send_reminders())
-
+# Main Loop
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+    ensure_json_exists()
+    print("Bot started...")
+    
+    loop = asyncio.get_event_loop()
+    loop.create_task(send_reminders())
+    
+    executor.start_polling(dp, skip_updates=True)
