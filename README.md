@@ -36,3 +36,6 @@
 1. Встановити залежності: `pip install -r requirements.txt`
 2. Створити файл `.env` з токеном.
 3. Запустити: `python bot.py`
+
+## Figma
+https://www.figma.com/site/jdqokvBSi9Of5NK5U0Vdqf/Untitled?node-id=0-1&t=4tFLxHWD9ikhHtVr-1
